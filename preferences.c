@@ -872,11 +872,11 @@ void declick_set_preferences(GtkWidget * widget, gpointer data)
 
     dc_weak_entry =
 	add_number_entry_with_label_double(weak_declick_sensitivity,
-					   "Weak Declick Sensitivity (default = 1.0) ",
+					   "Weak Declick Sensitivity (default = 0.45) ",
 					   dialog_table, row++);
     dc_strong_entry =
 	add_number_entry_with_label_double(strong_declick_sensitivity,
-					   "Strong Declick Sensitivity (default = 0.75) ",
+					   "Strong Declick Sensitivity (default = 0.35) ",
 					   dialog_table, row++);
 
     dc_fft_weak_entry =
@@ -1172,16 +1172,16 @@ void load_denoise_preferences(void)
 	gnome_config_get_int("n_noise_samples=16");
     denoise_prefs.smoothness = gnome_config_get_int("smoothness=11");
     denoise_prefs.FFT_SIZE = gnome_config_get_int("FFT_SIZE=8192");
-    denoise_prefs.amount = gnome_config_get_float("amount=0.3");
-    denoise_prefs.dn_gamma = gnome_config_get_float("dn_gamma=0.95");
+    denoise_prefs.amount = gnome_config_get_float("amount=0.22");
+    denoise_prefs.dn_gamma = gnome_config_get_float("dn_gamma=0.8");
     denoise_prefs.randomness = gnome_config_get_float("randomness=0.0");
-    denoise_prefs.window_type = gnome_config_get_int("window_type=1");
+    denoise_prefs.window_type = gnome_config_get_int("window_type=2");
     denoise_prefs.freq_filter = gnome_config_get_int("freq_filter=0");
     denoise_prefs.estimate_power_floor = gnome_config_get_int("estimate_power_floor=0");
     denoise_prefs.min_sample_freq = gnome_config_get_float("min_sample_freq=0.0");
     denoise_prefs.max_sample_freq = gnome_config_get_float("max_sample_freq=44100.0");
     denoise_prefs.noise_suppression_method =
-    gnome_config_get_int("noise_suppression_method=1");
+    gnome_config_get_int("noise_suppression_method=3");
     gnome_config_pop_prefix();
 }
 

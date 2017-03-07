@@ -158,6 +158,7 @@ long song_markers[MAX_MARKERS];
 gint file_is_open = FALSE;
 gint file_processing = FALSE;
 long playback_samples_per_block = 0;
+long playback_startplay_position;
 int count = 0;
 
 void d_print(char *fmt, ...)
@@ -359,16 +360,16 @@ void load_preferences(void)
     audio_view.last_sample = gnome_config_get_int("last_sample_viewed=-1");
     num_song_markers = 0;
     audio_view.channel_selection_mask = gnome_config_get_int("channel_selection_mask=0");
-    weak_declick_sensitivity = gnome_config_get_float("weak_declick_sensitivity=1.0");
-    strong_declick_sensitivity = gnome_config_get_float("strong_declick_sensitivity=0.75");
+    weak_declick_sensitivity = gnome_config_get_float("weak_declick_sensitivity=0.45");
+    strong_declick_sensitivity = gnome_config_get_float("strong_declick_sensitivity=0.35");
     declick_iterate_flag = gnome_config_get_int("declick_iterate=0");
     weak_fft_declick_sensitivity = gnome_config_get_float("weak_fft_declick_sensitivity=3.0");
     strong_fft_declick_sensitivity = gnome_config_get_float("strong_fft_declick_sensitivity=5.0");
-    declick_detector_type = gnome_config_get_int("declick_detector_type=0");
+    declick_detector_type = gnome_config_get_int("declick_detector_type=1");
     decrackle_level = gnome_config_get_float("decrackle_level=0.2");
     decrackle_window = gnome_config_get_int("decrackle_window=2000");
     decrackle_average = gnome_config_get_int("decrackle_average=3");
-    stop_key_highlight_interval = gnome_config_get_float("stop_key_highlight_interval=0.5");
+    stop_key_highlight_interval = gnome_config_get_float("stop_key_highlight_interval=0.8");
     song_key_highlight_interval = gnome_config_get_float("song_key_highlight_interval=15");
     song_mark_silence = gnome_config_get_float("song_mark_silence=2.0");
     sonogram_log = gnome_config_get_float("sonogram_log=0");
@@ -416,28 +417,16 @@ void save_preferences(void)
 /*      preferences_dialog(prefs);  */
 /*  }  */
 
+
 void display_message(char *msg, char *title) 
 {
-    GtkWidget *dlg, *txt;
+    GtkWidget *dialog;
+    dialog = gtk_message_dialog_new(NULL, GTK_DIALOG_MODAL, GTK_MESSAGE_INFO, GTK_BUTTONS_OK, msg);
 
-    dlg = gtk_dialog_new_with_buttons(title,
-    				      GTK_WINDOW(main_window),
-				      GTK_DIALOG_DESTROY_WITH_PARENT,
-				      GTK_STOCK_OK,
-				      GTK_RESPONSE_NONE,
-				      NULL);
-
-    txt = gtk_label_new(msg);
-
-    gtk_box_pack_start(GTK_BOX(GTK_DIALOG(dlg)->vbox), txt, TRUE, TRUE, 0) ;
-
-    gtk_widget_show_all(dlg) ;
-
-    gtk_dialog_run(GTK_DIALOG(dlg)) ;
-
-    gtk_widget_destroy(txt) ;
-    gtk_widget_destroy(dlg) ;
-
+    gtk_window_set_title(GTK_WINDOW(dialog), title);
+    gtk_dialog_run(GTK_DIALOG(dialog));
+    gtk_widget_destroy( GTK_WIDGET(dialog) );
+    
     main_redraw(FALSE, TRUE);
 }
 
@@ -448,7 +437,7 @@ void warning(char *msg)
 
 void info(char *msg)
 {
-    display_message(msg, "");
+    display_message(msg, "Info");
 }
 
 int yesnocancel(char *msg)
@@ -492,38 +481,26 @@ int yesnocancel(char *msg)
     return dres;
 }
 
+
 int yesno(char *msg)
 {
-    GtkWidget *dlg, *text;
-    int dres;
+    int ret;
+    GtkWidget *dialog;
+    dialog = gtk_message_dialog_new(NULL, GTK_DIALOG_MODAL, GTK_MESSAGE_QUESTION, GTK_BUTTONS_YES_NO, msg);
 
-    dlg = gtk_dialog_new_with_buttons("Question",
-    				        GTK_WINDOW(main_window),
-				        GTK_DIALOG_DESTROY_WITH_PARENT,
-					GTK_STOCK_YES,
-					GTK_RESPONSE_YES,
-					 GTK_STOCK_NO,
-					 GTK_RESPONSE_NO,
-					 NULL);
-
-    text = gtk_label_new(msg);
-    gtk_widget_show(text);
-    gtk_box_pack_start(GTK_BOX(GTK_DIALOG(dlg)->vbox), text, TRUE, TRUE, 0);
-
-    gtk_widget_show_all(dlg) ;
-
-    dres = gtk_dialog_run(GTK_DIALOG(dlg));
-    gtk_widget_destroy(dlg) ;
-
-    if (dres == GTK_RESPONSE_NONE || dres == GTK_RESPONSE_NO) {
-	dres = 1 ;		/* return we clicked no */
+    gtk_window_set_title(GTK_WINDOW(dialog), "GWC");
+    gint result = gtk_dialog_run(GTK_DIALOG(dialog));
+    gtk_widget_destroy( GTK_WIDGET(dialog) );
+    
+    if (result == GTK_RESPONSE_YES) {
+	ret = 0;
     } else {
-	dres = 0 ; 		/* return we clicked yes */
+	ret = 1;
     }
-
+    
     main_redraw(FALSE, TRUE);
-
-    return dres;
+    
+    return ret;
 }
 
 int prompt_user(char *msg, char *s, int maxlen)
@@ -780,13 +757,18 @@ void decrackle(GtkWidget * widget, gpointer data)
 void noise_sample(GtkWidget * widget, gpointer data)
 {
     if ((file_processing == FALSE) && (file_is_open == TRUE) && (audio_playback == FALSE)) {
-	file_processing = TRUE;
-	get_region_of_interest(&denoise_data.noise_start,
-			       &denoise_data.noise_end, &audio_view);
-	denoise_data.ready = TRUE;
-	load_denoise_preferences() ;
-	//print_noise_sample(&prefs, &denoise_prefs, denoise_data.noise_start, denoise_data.noise_end) ;
-	file_processing = FALSE;
+	if (audio_view.selection_region == TRUE) {
+	    file_processing = TRUE;
+	    get_region_of_interest(&denoise_data.noise_start,
+				   &denoise_data.noise_end, &audio_view);
+	    denoise_data.ready = TRUE;
+	    load_denoise_preferences() ;
+	    //print_noise_sample(&prefs, &denoise_prefs, denoise_data.noise_start, denoise_data.noise_end) ;
+	    file_processing = FALSE;
+	    set_status_text("Noise sample taken");
+	} else {
+	  set_status_text("First you have to select a portion of the audio with pure noise");
+	}
     }
 }
 
@@ -994,8 +976,6 @@ void scale_down_callback(GtkWidget * widget, gpointer data)
 * in this example. More on callbacks below. */
 void stop_all_playback_functions(GtkWidget * widget, gpointer data)
 {
-    audio_playback = FALSE;
-    
     if (playback_timer != -1) {
 	gtk_timeout_remove(playback_timer);
 	playback_timer = -1 ;
@@ -1005,9 +985,15 @@ void stop_all_playback_functions(GtkWidget * widget, gpointer data)
 	cursor_timer = -1 ;
     }
     stop_playback(0);
+    
+    audio_playback = FALSE;
+    audio_is_looping = FALSE;
+    
+    audio_view.cursor_position = playback_startplay_position;
 
     // show current playback position, if outside of the view
-    if (audio_view.cursor_position > audio_view.last_sample) {
+    if ((audio_view.cursor_position > audio_view.last_sample) ||
+	(audio_view.cursor_position < audio_view.first_sample)) {
 	long view_size_half = (audio_view.last_sample - audio_view.first_sample) >> 1;
 	audio_view.first_sample = audio_view.cursor_position - view_size_half;
 	audio_view.last_sample = audio_view.cursor_position + view_size_half;
@@ -1038,14 +1024,33 @@ void gnome_flush(void)
  */
 gint update_cursor(gpointer data)
 {
+    if (!audio_playback)
+      return 0;
+    
+    // stop playback
+    if (!audio_is_looping) {
+      long first, last;
+      get_region_of_interest(&first, &last, &audio_view);
+      long processed_samples = get_processed_samples();
+      audio_debug_print("update_cursor processed samples = %lu\n", processed_samples);
+      if ((processed_samples == 0) || (processed_samples >= (last - playback_startplay_position))) {
+	  stop_all_playback_functions(NULL, NULL);
+	  // repaint cursor
+	  main_redraw(TRUE, TRUE);
+	  return 0;
+      }
+    }
+    
     // find out where the playback is right now and update audio_view.cursor_position
     set_playback_cursor_position(&audio_view);
     
-    // autoscroll on playback, if no audio selected,
-    // and not zoomed in too much
+    // autoscroll on playback
+    //
+    //  NOTE:  autoscrolling is omitted if cursor_samples_per_pixel is too low (zoomed in too much),
+    //         this would cause buffering failure (audio skipping)
     //
     long cursor_samples_per_pixel = (audio_view.last_sample - audio_view.first_sample) / audio_view.canvas_width;
-    if ((audio_view.selection_region == FALSE) && (cursor_samples_per_pixel > 150) &&
+    if ((cursor_samples_per_pixel > 150) &&
       (audio_view.cursor_position > (audio_view.last_sample - 
       ((audio_view.last_sample - audio_view.first_sample) / 30)))) {
       
@@ -1062,17 +1067,6 @@ gint update_cursor(gpointer data)
     } else {
       // repaint cursor
       main_redraw(TRUE, TRUE);
-    }
-
-    // stop playback
-    long first, last, playback_samples_left;
-    if (!audio_is_looping) {
-      get_region_of_interest(&first, &last, &audio_view) ;
-      playback_samples_left = last - get_playback_position();
-      if (playback_samples_left < 900) {
-	  stop_all_playback_functions(NULL, NULL);
-	  audio_debug_print("update_cursor stopped playback, playback_samples_left = %ld\n", playback_samples_left);
-      } 
     }
     
     return (TRUE);
@@ -1130,21 +1124,21 @@ void start_gwc_playback(GtkWidget * widget, gpointer data)
 	/* lower limit of 1/100th second on screen redraws */
 	if (cursor_millisec < 20)
 	    cursor_millisec = 19;
-	    
+	else if (cursor_millisec > 100)
+	    cursor_millisec = 100;
+
 	audio_playback = TRUE;
 	audio_debug_print("play_a_block timer: %ld ms\n", playback_millisec);
 	audio_debug_print("update_cursor timer: %ld ms\n", cursor_millisec);
 	audio_debug_print("cursor_samples_per_pixel: %ld\n", cursor_samples_per_pixel);
+	play_a_block(NULL);
 	playback_timer = gtk_timeout_add(playback_millisec, play_a_block, NULL);
 	cursor_timer = gtk_timeout_add(cursor_millisec, update_cursor, NULL);
 
-	play_a_block(NULL);
-	//update_cursor(NULL);
     }
 
     audio_debug_print("leaving start_gwc_playback with audio_playback=%d\n", audio_playback) ;
 
-    audio_is_looping = FALSE ;
 }
 
 void detect_only_func(GtkWidget * widget, gpointer data)
@@ -1459,6 +1453,7 @@ void view_all(GtkWidget * widget, gpointer data)
 	audio_view.first_sample = 0;
 	audio_view.last_sample = prefs.n_samples - 1;
 	audio_view.selection_region = FALSE;
+	audio_view.channel_selection_mask = 0x03;
 	set_scroll_bar(prefs.n_samples - 1, audio_view.first_sample,
 		       audio_view.last_sample);
 	/* set_scroll_bar redraws */
@@ -1566,11 +1561,10 @@ gboolean  key_press_cb(GtkWidget * widget, GdkEventKey * event, gpointer data)
 	case GDK_space:
 	// play/stop playback
 	    if (audio_playback == FALSE) {
-		start_gwc_playback(widget, data);
 		if ((event->state & GDK_CONTROL_MASK) || (event->state & GDK_SHIFT_MASK))
 		  audio_is_looping = TRUE;
+		start_gwc_playback(widget, data);
 	    } else {
-	      audio_is_looping = FALSE;
 	      stop_all_playback_functions(widget, data);
 	      // repaint cursor
 	      main_redraw(TRUE, TRUE);
@@ -1583,12 +1577,11 @@ gboolean  key_press_cb(GtkWidget * widget, GdkEventKey * event, gpointer data)
 		//gtk_timeout_remove(cursor_timer);
 		stop_all_playback_functions(widget, data);
 		audio_view.selected_last_sample = audio_view.cursor_position;
-		audio_view.selected_first_sample =
-		    audio_view.selected_last_sample -
-		    prefs.rate * stop_key_highlight_interval;
-		if (audio_view.selected_first_sample < 0)
-		    audio_view.selected_first_sample = 0;
+		audio_view.selected_first_sample = MAX(0,
+		    (audio_view.selected_last_sample - prefs.rate * stop_key_highlight_interval));
 		audio_view.selection_region = TRUE;
+		playback_startplay_position = audio_view.selected_first_sample;
+		audio_view.cursor_position = playback_startplay_position;
 		main_redraw(FALSE, TRUE);
 	    }
 	    break;
@@ -1598,6 +1591,7 @@ gboolean  key_press_cb(GtkWidget * widget, GdkEventKey * event, gpointer data)
 		audio_view.selected_first_sample = 0;
 		audio_view.selected_last_sample = prefs.n_samples - 1;
 		audio_view.selection_region = FALSE;
+		audio_view.channel_selection_mask = 0x03;
 		main_redraw(FALSE, TRUE);
 	    }
 	    break;
@@ -1741,10 +1735,10 @@ void destroy(GtkWidget * widget, gpointer data)
 
 void about(GtkWidget * widget, gpointer data)
 {
-    const gchar *authors[] = { "Jeffrey J. Welty", "James Tappin", "Ian Leonard", "Bill Jetzer", "Charles Morgon", "Frank Freudenberg", "Thiemo Gehrke", "Rob Frohne", "clixt.net",  NULL };
+    const gchar *authors[] = { "Jeffrey J. Welty", "James Tappin", "Ian Leonard", "Bill Jetzer", "Charles Morgon", "Frank Freudenberg", "Thiemo Gehrke", "Rob Frohne", NULL };
     gtk_widget_show(gnome_about_new("Gnome Wave Cleaner",
 				    VERSION,
-				    "Copyright 2001,2002,2003,2004,2005 Redhawk.org, 2017 clixt.net",
+				    "Copyright 2001,2002,2003,2004,2005 Redhawk.org, 2017 mod by clixt.net",
 				    "An application to aid in denoising (hiss & clicks) of audio files",
 				    authors,
 				    NULL,

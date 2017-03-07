@@ -47,6 +47,9 @@ extern long markers[] ;
 extern long n_markers ;
 extern long num_song_markers, song_markers[] ;
 
+extern struct view audio_view;
+extern int audio_playback;
+extern long playback_startplay_position;
 
 GdkColor red_gdk_color = {0, 65535, 0, 0} ;
 GdkColor green_gdk_color = {0, 0, 65535, 0} ;
@@ -66,6 +69,7 @@ GdkColor *orange_color = &orange_gdk_color ;
 GdkColor *white_color = &white_gdk_color ;
 GdkColor *grey_color = &grey_gdk_color ;
 GdkColor *black_color = &black_gdk_color ;
+GdkColor *cursor_color = &orange_gdk_color;
 
 /*
 #define highlight_color white_color
@@ -132,19 +136,35 @@ draw_a_line(GdkGC *gc, gint x1, gint y1, gint x2, gint y2, GdkColor *color, int 
        }
 }
 
-/* a utility function to draw a line */
+// paint playback position cursor
 static void
-draw_a_cursor_line(GdkGC *gc,
-	    gint x1, gint y1, gint x2, gint y2, GdkColor *color, int end_shapes)
+draw_cursor_line(GdkGC *gc, gint x, gint l, GdkColor *color)
 {
-	gdk_gc_set_foreground(gc, color) ;
-        if (x1 > SHRT_MIN && x1 < SHRT_MAX)
- 	   gdk_draw_line(highlight_pixmap, gc, x1,y1,x2,y2) ;
+        if ((x <= SHRT_MIN) || (x >= SHRT_MAX))
+	    return;
+	
+	gint y1, y2;
+	    
+	if (audio_view.channel_selection_mask == 0x01) {
+	    // playing LEFT channel
+	    y1 = 20;
+	    y2 = (l >> 1) - 20;
+	} else if (audio_view.channel_selection_mask == 0x02) {
+	    // playing RIGHT channel
+	    y1 = (l >> 1) + 20;
+	    y2 = l - 20;
+	} else {
+	    // playing both channels
+	    y1 = 20;
+	    y2 = l - 20;
+	}
+	
+	gdk_gc_set_foreground(gc, color);
+	gdk_draw_line(highlight_pixmap, gc, x, y1, x, y2); 
 
 }
 
 int first_pick_x, last_pick_x ;
-int selecting_region = FALSE ;
 int region_select_min_x = -1 ;
 int region_select_max_x = -1 ;
 
@@ -271,40 +291,65 @@ extern struct view audio_view ;
 
 int audio_area_button_event(GtkWidget *c, GdkEventButton *event, gpointer data)
 {
-    /* we ignore all events except for BUTTON_PRESS */
+    extern int audio_is_looping;
+    extern int audio_playback;
 
-    if(event->type == GDK_BUTTON_PRESS) {
+    // right button click
+    if (event->type == GDK_BUTTON_PRESS  &&  event->button == 3) {
+	int loop_playback = audio_is_looping;
+	if (audio_playback)
+	  stop_all_playback_functions(NULL, NULL);
+	
+	// set playback position
+	long new_position = pixel_to_sample(&audio_view, (int)event->x);
+	long first, last;
+	get_region_of_interest(&first, &last, &audio_view);
+	
+	if ((new_position >= first) && (new_position < last)) {
+		playback_startplay_position = new_position;
+	} else if (new_position < first) {
+		playback_startplay_position = first;
+	}
+	if (new_position >= last) {
+	// we clicked behind the last selected position, leave playback stopped
+		audio_view.cursor_position = last;
+		main_redraw(TRUE, TRUE);
+	} else {
+		audio_view.cursor_position = playback_startplay_position;
+		main_redraw(TRUE, TRUE);
+		start_gwc_playback(NULL, NULL);
+		audio_is_looping = loop_playback;
+	}
+	return 0;
+    }
+    
+    // ignore other clicking actions during playback
+    if (audio_playback)
+      return 0;
+    
+    // left button press
+    if (event->type == GDK_BUTTON_PRESS  &&  event->button == 1) {
 	first_pick_x = last_pick_x = (int)event->x ;
-	selecting_region = TRUE ;
 	d_print("press mx:%d my:%d\n", (int)event->x, (int)event->y) ;
 	if((int)event->y < audio_view.canvas_height/4)
-	    audio_view.channel_selection_mask = 0x01 ;
+	    audio_view.channel_selection_mask = 0x01;
 	else if((int)event->y > 3*audio_view.canvas_height/4)
-	    audio_view.channel_selection_mask = 0x02 ;
+	    audio_view.channel_selection_mask = 0x02;
 	else
-	    audio_view.channel_selection_mask = 0x03 ;
+	    audio_view.channel_selection_mask = 0x03;
 	audio_view.selection_region = FALSE ;
 	main_redraw(FALSE, FALSE) ;
 	display_times() ;
 	return TRUE;
-    }
-
-    if(event->type == GDK_BUTTON_RELEASE) {
-	region_select_min_x = MIN(first_pick_x, last_pick_x) ;
-	region_select_max_x = MAX(first_pick_x, last_pick_x) ;
-	region_select_min_x = MAX(region_select_min_x, 0) ;
-	region_select_max_x = MIN(region_select_max_x, audio_view.canvas_width-1) ;
-	if(region_select_max_x - region_select_min_x > 0) {
-	    audio_view.selected_first_sample = pixel_to_sample(&audio_view, region_select_min_x) ;
-	    audio_view.selected_last_sample = pixel_to_sample(&audio_view, region_select_max_x) ;
-	    audio_view.selection_region = TRUE ;
-	} else {
-	    audio_view.selection_region = FALSE ;
-	}
-	selecting_region = FALSE ;
-	display_times() ;
-	main_redraw(FALSE, FALSE) ;
-	return TRUE;
+    // left button release
+    } else if (event->type == GDK_BUTTON_RELEASE  &&  event->button == 1) {
+	// this is a new selection => set start_playback position to the beginning of the selection
+	if (audio_view.selection_region == TRUE) {
+	    playback_startplay_position = audio_view.selected_first_sample;
+	    audio_view.cursor_position = playback_startplay_position;
+	} else
+	    audio_view.channel_selection_mask = 0x03;
+	main_redraw(TRUE, TRUE);
     }
 
     return FALSE ;
@@ -326,65 +371,63 @@ int audio_area_motion_event(GtkWidget *c, GdkEventMotion *event)
 /*      d_print("motion mx:%d my:%d\n", x, y) ;  */
 
     if(state & GDK_BUTTON1_MASK) {
-	if(selecting_region == TRUE) {
-	    long marker_pix ;
-	    int i ;
-	    int min_marker_dist_to_first = 10 ;
-	    int min_marker_dist_to_last = 10 ;
+	long marker_pix ;
+	int i ;
+	int min_marker_dist_to_first = 10 ;
+	int min_marker_dist_to_last = 10 ;
 
-	    last_pick_x = x ;
-	    region_select_min_x = MIN(first_pick_x, last_pick_x) ;
-	    region_select_max_x = MAX(first_pick_x, last_pick_x) ;
-	    region_select_min_x = MAX(region_select_min_x, 0) ;
-	    region_select_max_x = MIN(region_select_max_x, audio_view.canvas_width-1) ;
+	last_pick_x = x ;
+	region_select_min_x = MIN(first_pick_x, last_pick_x) ;
+	region_select_max_x = MAX(first_pick_x, last_pick_x) ;
+	region_select_min_x = MAX(region_select_min_x, 0) ;
+	region_select_max_x = MIN(region_select_max_x, audio_view.canvas_width-1) ;
 
-	    audio_view.selected_first_sample = pixel_to_sample(&audio_view, region_select_min_x) ;
-	    audio_view.selected_last_sample = pixel_to_sample(&audio_view, region_select_max_x+1) - 1 ;
+	audio_view.selected_first_sample = pixel_to_sample(&audio_view, region_select_min_x) ;
+	audio_view.selected_last_sample = pixel_to_sample(&audio_view, region_select_max_x+1) - 1 ;
 
-	    if(audio_view.selected_last_sample > audio_view.n_samples-1) audio_view.selected_last_sample = audio_view.n_samples-1 ;
+	if(audio_view.selected_last_sample > audio_view.n_samples-1) audio_view.selected_last_sample = audio_view.n_samples-1 ;
 
-	    for(i = 0 ; i < n_markers ; i++) {
-		if(markers[i] < 0) continue ;
+	for(i = 0 ; i < n_markers ; i++) {
+	    if(markers[i] < 0) continue ;
 
-		marker_pix = sample_to_pixel(&audio_view, markers[i]) ;
+	    marker_pix = sample_to_pixel(&audio_view, markers[i]) ;
 
-		if( ABS(region_select_min_x-marker_pix) < min_marker_dist_to_first) {
-		    min_marker_dist_to_first = ABS(region_select_min_x-marker_pix) ;
-		    //region_select_min_x = marker_pix ;
-		    audio_view.selected_first_sample = markers[i] ;
-		}
-
-		if( ABS(region_select_max_x-marker_pix) < min_marker_dist_to_last) {
-		    min_marker_dist_to_last = ABS(region_select_max_x-marker_pix) ;
-		    //region_select_max_x = marker_pix ;
-		    audio_view.selected_last_sample = markers[i] ;
-		}
+	    if( ABS(region_select_min_x-marker_pix) < min_marker_dist_to_first) {
+		min_marker_dist_to_first = ABS(region_select_min_x-marker_pix) ;
+		//region_select_min_x = marker_pix ;
+		audio_view.selected_first_sample = markers[i] ;
 	    }
 
-	    for(i = 0 ; i < num_song_markers ; i++) {
-		if(song_markers[i] < 0) continue ;
-
-		marker_pix = sample_to_pixel(&audio_view, song_markers[i]) ;
-
-		if( ABS(region_select_min_x-marker_pix) < min_marker_dist_to_first) {
-		    min_marker_dist_to_first = ABS(region_select_min_x-marker_pix) ;
-		    //region_select_min_x = marker_pix ;
-		    audio_view.selected_first_sample = song_markers[i] ;
-		}
-
-		if( ABS(region_select_max_x-marker_pix) < min_marker_dist_to_last) {
-		    min_marker_dist_to_last = ABS(region_select_max_x-marker_pix) ;
-		    //region_select_max_x = marker_pix ;
-		    audio_view.selected_last_sample = song_markers[i] ;
-		}
+	    if( ABS(region_select_max_x-marker_pix) < min_marker_dist_to_last) {
+		min_marker_dist_to_last = ABS(region_select_max_x-marker_pix) ;
+		//region_select_max_x = marker_pix ;
+		audio_view.selected_last_sample = markers[i] ;
 	    }
-
-	    audio_view.selection_region = TRUE ;
-
-	    display_times() ;
-	    main_redraw(FALSE, FALSE) ;
-	    return TRUE ;
 	}
+
+	for(i = 0 ; i < num_song_markers ; i++) {
+	    if(song_markers[i] < 0) continue ;
+
+	    marker_pix = sample_to_pixel(&audio_view, song_markers[i]) ;
+
+	    if( ABS(region_select_min_x-marker_pix) < min_marker_dist_to_first) {
+		min_marker_dist_to_first = ABS(region_select_min_x-marker_pix) ;
+		//region_select_min_x = marker_pix ;
+		audio_view.selected_first_sample = song_markers[i] ;
+	    }
+
+	    if( ABS(region_select_max_x-marker_pix) < min_marker_dist_to_last) {
+		min_marker_dist_to_last = ABS(region_select_max_x-marker_pix) ;
+		//region_select_max_x = marker_pix ;
+		audio_view.selected_last_sample = song_markers[i] ;
+	    }
+	}
+
+	audio_view.selection_region = TRUE ;
+
+	display_times() ;
+	main_redraw(FALSE, FALSE) ;
+	return TRUE ;
     }
 
 
@@ -860,7 +903,7 @@ void paint_screen_with_highlight(struct view *v, GtkWidget *da, int y1, int y2, 
 	   x,0,
 	   0,0,
 	   1, v->canvas_height);
-	draw_a_cursor_line(MyGC, x+0, 0, x+0, v->canvas_height-1, yellow_color, 0) ;
+	draw_cursor_line(MyGC, x, v->canvas_height, cursor_color);
 /*  	draw_a_cursor_line(MyGC, x+1, y1+1, x+1, y2-1, yellow_color, 0) ;  */
 /*  	draw_a_cursor_line(MyGC, x+2, y1+2, x+2, y2-2, yellow_color, 0) ;  */
 /*  	draw_a_cursor_line(MyGC, x+3, y1+3, x+3, y2-3, yellow_color, 0) ;  */
@@ -940,7 +983,8 @@ void redraw(struct view *v, struct sound_prefs *p, GtkWidget *da, int cursor_fla
 		   0,0,
 		   1, v->canvas_height);
 
-	       draw_a_cursor_line(MyGC, x+0, 0, x+0, v->canvas_height-1, yellow_color, 0) ;
+		   // repaint cursor line
+		   draw_cursor_line(MyGC, x, v->canvas_height, cursor_color) ;
 	       
 	       gdk_draw_pixmap(da->window,
 		   da->style->fg_gc[GTK_WIDGET_STATE (da)],

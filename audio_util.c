@@ -93,13 +93,13 @@ int current_sample ;
 
 void position_wavefile_pointer(long sample_number) ;
 
-unsigned long BUFSIZE ;
+unsigned long BUFSIZE = 0;
 unsigned char audio_buffer[MAXBUFSIZE] ;
 unsigned char audio_buffer2[MAXBUFSIZE] ;
 
+extern long playback_startplay_position;
 long playback_start_position;
 long playback_end_position;
-long playback_startplay_position;
 long playback_samples_total = 0 ;
 long playback_samples_remaining = 0;
 long playback_bytes_per_block ;
@@ -219,31 +219,47 @@ void config_audio_device(int rate_set, int bits_set, int stereo_set)
 }
 
 /*
+ * return number of processed samples since opening the audio device
+ */
+long get_processed_samples(void) {
+    return audio_device_processed_bytes() / PLAYBACK_FRAMESIZE;
+}
+
+/*
  * return playback position (current sample)
  */
-long get_playback_position() {
+long get_playback_position(void) {
+  
+  extern int audio_is_looping;
   long current_position;
-  long processed_samples = audio_device_processed_bytes() / PLAYBACK_FRAMESIZE;
-  long processed_frames = processed_samples / (2 - stereo);
+  long processed_samples = get_processed_samples();
+  long processed_frames = processed_samples / MAX(1, (2 - stereo));
+  //d_print("get_playback_position processed_frames = %ld\n", processed_frames);
   
-  if (playback_startplay_position > playback_start_position) {
-    if ((playback_end_position - playback_startplay_position) > processed_frames) {
-      // 1st-loop run, from startplay to end
-      current_position = playback_startplay_position + processed_frames;
-    } else {
-      // consecutive loops
-      current_position = playback_start_position + (processed_frames -
-                         (playback_end_position - playback_startplay_position)) % playback_samples_total;
-    }
+  if ((playback_end_position - playback_startplay_position) >= processed_frames) {
+    // 1st-loop run, from startplay to end
+    current_position = playback_startplay_position + processed_frames;
   } else {
-    current_position = playback_start_position + processed_frames % playback_samples_total;
+    if (audio_is_looping) {
+      // consecutive loops
+      if (playback_startplay_position > playback_start_position) {
+	// we started in the middle
+	current_position = playback_start_position + (processed_frames -
+			   (playback_end_position - playback_startplay_position)) % playback_samples_total;
+      } else {
+	// we started at the beginning of the region_of_interest
+	current_position = playback_startplay_position + processed_frames % playback_samples_total;
+      }
+    } else {
+      // no looping, we processed all the frames including zeros => we are at the end!
+      current_position = playback_end_position;
+    }
   }
-  
+
   //d_print("get_playback_position: %ld, processed_samples: %ld\n", current_position, processed_samples);
   
   return current_position;
 }
-
 /*
  * set cursor_position in audio_view structure to match the current playback position
  * called from gwc.c: play_a_block()
@@ -311,8 +327,8 @@ long start_playback(char *output_device, struct view *v, struct sound_prefs *p, 
 	BUFSIZE = MAXBUFSIZE ;
     playback_bytes_per_block = BUFSIZE ;
 
-    playback_samples_total = playback_end_position - playback_start_position - 1;
-    playback_samples_remaining = playback_end_position - playback_startplay_position - 1;
+    playback_samples_total = playback_end_position - playback_start_position;
+    playback_samples_remaining = playback_end_position - playback_startplay_position;
     
     // process_audio: align buffer at the end of loop with zeros
     zeros_needed = playback_bytes_per_block - ((playback_samples_remaining * PLAYBACK_FRAMESIZE) % playback_bytes_per_block) ;
@@ -344,36 +360,39 @@ long start_playback(char *output_device, struct view *v, struct sound_prefs *p, 
  */
 int process_audio(gfloat *pL, gfloat *pR)
 {
-    int i, j, frame ;
+    int i, frame ;
     unsigned char *p_char;
     long len = 0, n_samples_to_read = 0, n_read = 0;
-    double maxpossible, feather_out_N;
-    int feather_out = 0;
+    double maxpossible;
     short *p_short ;
     int *p_int ;
+
+    if (audio_state == AUDIO_IS_IDLE) {
+	d_print("process_audio says NOTHING is going on.\n") ;
+	return 1;
+    }
+    if (audio_state != AUDIO_IS_PLAYBACK) {
+	d_print("process_audio: unsupported audio state: %i\n", audio_state);
+	return 1;
+    }
     
+    if (playback_samples_remaining > 0)
+	len = audio_device_nonblocking_write_buffer_size(BUFSIZE, playback_samples_remaining * PLAYBACK_FRAMESIZE);
+    if (len == 0) {
+	//g_print("process_audio: buffering done\n");
+	return 2;
+    } else if (len < 0) {
+	d_print("process_audio: len == %ld, buffer underflow\n", len);
+	return 3;
+    }
+
     *pL = 0.0;
     *pR = 0.0;
     
-    if(audio_state == AUDIO_IS_IDLE) {
-	d_print("process_audio says NOTHING is going on.\n") ;
-	return 1 ;
-    } else if(audio_state == AUDIO_IS_PLAYBACK) {
-	if (playback_samples_remaining > 0)
-	  len = audio_device_nonblocking_write_buffer_size(MAXBUFSIZE, playback_samples_remaining * PLAYBACK_FRAMESIZE);
-	if (len == 0) {
-	    //g_print("process_audio: buffering done\n");
-	    return 2;
-	} else if (len < 0) {
-	    d_print("process_audio: len == %ld, buffer underflow\n", len);
-	    return 3;
-	}
-    }
-
     n_samples_to_read = len/PLAYBACK_FRAMESIZE ;
-
-    if(n_samples_to_read*PLAYBACK_FRAMESIZE != len)
-	g_print("ACK!!\n") ;
+    
+    if (n_samples_to_read*PLAYBACK_FRAMESIZE != len)
+	d_print("process_audio: ACK!!\n") ;
 
     p_char = (unsigned char *)audio_buffer ;
     p_short = (short *)audio_buffer ;
@@ -397,20 +416,12 @@ int process_audio(gfloat *pL, gfloat *pR)
     #endif
     }
 
-    #define FEATHER_WIDTH 30000
-    if(playback_samples_total - n_read < 0) {
-	feather_out = 1 ;
-	feather_out_N = MIN(n_read, FEATHER_WIDTH) ;
-	d_print("Feather out n_read=%ld, playback_samples_remaining=%ld, N=%lf\n", n_read, playback_samples_remaining, feather_out_N) ;
-    }
-
     int vl, vr, maxl = 0, maxr = 0;
     for(frame = 0  ; frame < n_read ; frame++) {
 	
-	i = frame*2 ;
+	i = frame * (stereo + 1) ;
 
 	if(BYTESPERSAMPLE < 3) {
-	  
 	    // playback for left, right, or both channels
 	    if (audio_view.channel_selection_mask == 0x01) {
 		// play LEFT channel in both L and R outputs
@@ -419,28 +430,8 @@ int process_audio(gfloat *pL, gfloat *pR)
 		// play RIGHT channel in both L and R outputs
 		p_short[i] = p_short[i+1];
 	    }
-	  
-	    if(feather_out == 1 && n_read-(frame+1) < FEATHER_WIDTH) {
-		j = n_read - frame - 1;
-		double p = (double)(j)/feather_out_N ;
-
-		//if(i > n_read - 100) {
-		//  printf("j:%d %lf %hd %hd ", j, p, p_short[i], p_short[i+1]) ;
-		//}
-		
-		p_short[i] *= p ;
-		p_short[i+1] *= p ;
-
-		//if(i > n_read - 100) {
-		//    printf("%hd %hd\n", p_short[i], p_short[i+1]) ;
-		//}
-
-		if(frame == n_read-1) fprintf(stderr, "Feather out final %lf, n_read=%ld", p, n_read) ;
-	    }
-	    
 	    vl = p_short[i];
 	    vr = p_short[i+1];
-	    
 	} else {
 	    // playback for left, right, or both channels
 	    if (audio_view.channel_selection_mask == 0x01) {
@@ -449,13 +440,6 @@ int process_audio(gfloat *pL, gfloat *pR)
 	    } else if (audio_view.channel_selection_mask == 0x02) {
 		// play RIGHT channel in both L and R outputs
 		p_int[i] = p_int[i+1];
-	    }
-	  
-	    if(feather_out == 1 && n_read-(i+1) < 10000) {
-		double p = 1.0 - (double)(n_read-(i+1))/9999.0 ;
-		printf(".") ;
-		p_int[i] *= p ;
-		p_int[i+1] *= p ;
 	    }
 	    vl = p_int[i];
 	    vr = p_int[i+1];
@@ -472,7 +456,6 @@ int process_audio(gfloat *pL, gfloat *pR)
 	}
     }
     #undef BYTESPERSAMPLE
-    if(feather_out == 1) printf("\n") ;
     
     *pL = (gfloat) maxl / maxpossible;
     *pR = (gfloat) maxr / maxpossible;
@@ -489,10 +472,7 @@ int process_audio(gfloat *pL, gfloat *pR)
 
 	    if (audio_is_looping) {
 	        playback_samples_remaining = playback_end_position - playback_start_position;
-		sf_seek(sndfile, playback_start_position, SEEK_SET) ;
-		zeros_needed = playback_bytes_per_block - ((playback_samples_remaining * PLAYBACK_FRAMESIZE) % playback_bytes_per_block) ;
-		if (zeros_needed < PLAYBACK_FRAMESIZE)
-		  zeros_needed = PLAYBACK_FRAMESIZE ;
+		position_wavefile_pointer(playback_start_position);
 		looped_count++;
 		//g_print("process_audio loop %lu: zeros needed = %ld\n", looped_count, zeros_needed);
 	    } else {
@@ -512,10 +492,16 @@ int process_audio(gfloat *pL, gfloat *pR)
 
 void stop_playback(unsigned int force)
 {
-    //fprintf(stderr,"stop_playback() invoked, force = %u\n", force);
-    
     // remember current playback position to know where to start playback next
-    playback_startplay_position = get_playback_position();
+    extern int audio_is_looping;
+    if ((get_processed_samples() == 0) && (!audio_is_looping)) {
+      // The playback buffer is already empty. Since we cannot determine the proper playback position,
+      // just assume the playback stopped at the end of the region_of_interest:
+      long first;
+      get_region_of_interest(&first, &playback_startplay_position, &audio_view);
+    } else {
+      playback_startplay_position = get_playback_position();
+    }
     
     if (force > 0)
       force = 1;

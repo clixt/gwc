@@ -40,6 +40,29 @@
 static char current_undo_msg[200] ;
 static int undo_fd = -1 ;
 static int undo_level = 0 ;
+char tmpdir[PATH_MAX+1];
+
+// create temp directory
+void mktempdir(void) {
+
+    // this function equals to: strcpy(tmpdir,"/tmp/");
+    strcpy(tmpdir, P_tmpdir);
+    strcat(tmpdir, "/");
+    return;
+    
+    // to create tmp-subdir would work, but the directory is not being removed after program quits :(
+    // 
+    char template[] = "/tmp/gwc_XXXXXX";
+    char *fd;
+    
+    fd = mkdtemp(template);
+    if (fd != NULL) {
+	strcpy(tmpdir, fd);
+    } else {
+	strcpy(tmpdir, P_tmpdir);
+    }
+    strcat(tmpdir, "/");
+}
 
 int get_undo_levels(void)
 {
@@ -51,9 +74,13 @@ int start_save_undo(char *undo_msg, struct view *v)
     char filename[1024] ;
     short l ;
 
+    if (strlen(tmpdir) == 0) {
+	mktempdir();
+    }
+
     undo_level++ ;
 
-    sprintf(filename, "gwc_undo_%d.dat", undo_level) ;
+    sprintf(filename, "%sgwc_undo_%d.dat", tmpdir, undo_level) ;
 
     if( (undo_fd = open(filename, O_CREAT|O_TRUNC|O_RDWR, S_IRUSR|S_IWUSR)) == -1) {
 	warning("Can't save undo information") ;
@@ -210,7 +237,7 @@ int undo(struct view *v, struct sound_prefs *p)
 	return undo_level ;
     }
 
-    sprintf(filename, "gwc_undo_%d.dat", undo_level) ;
+    sprintf(filename, "%sgwc_undo_%d.dat", tmpdir, undo_level) ;
 
     if( (undo_fd = open(filename, O_RDONLY)) == -1) {
 	warning("Can't undo, undo save data has been deleted from hard drive!") ;
@@ -333,7 +360,7 @@ void undo_purge(void)
     char filename[1024] ;
 
     while(undo_level>0) {
-	sprintf(filename, "gwc_undo_%d.dat", undo_level) ;
+	sprintf(filename, "%sgwc_undo_%d.dat", tmpdir, undo_level) ;
 	unlink(filename) ;
 	undo_level-- ;
     }
